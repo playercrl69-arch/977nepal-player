@@ -3,10 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>977 Nepal</title>
+  <title>977 Nepal - Dual Audio Player</title>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/shaka-player.ui.min.js" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/controls.min.css" crossorigin="anonymous">
+  
+  <!-- YouTube iFrame API -->
+  <script src="https://www.youtube.com/iframe_api"></script>
 
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -39,6 +42,50 @@
       display: none !important;
     }
 
+    /* AUDIO SWITCH BUTTON */
+    .audio-switch-overlay {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.7);
+      border: 2px solid #ff0000;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.6);
+      transition: all 0.3s ease;
+      min-width: 220px;
+    }
+
+    .audio-switch-overlay:hover {
+      background: rgba(255, 0, 0, 0.2);
+      transform: translateY(-2px);
+    }
+
+    .audio-switch-overlay.active {
+      background: rgba(255, 0, 0, 0.3);
+      border-color: #00ff00;
+    }
+
+    .audio-switch-icon {
+      width: 20px;
+      height: 20px;
+      filter: invert(1);
+    }
+
+    .audio-status {
+      font-size: 12px;
+      opacity: 0.8;
+      margin-left: auto;
+    }
+
     /* TELEGRAM BUTTON */
     .telegram-overlay {
       position: absolute;
@@ -67,7 +114,53 @@
       opacity: 0.9;
     }
 
+    /* YOUTUBE IFRAME (HIDDEN) */
+    #youtube-player-container {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #youtube-audio-player {
+      width: 0;
+      height: 0;
+      border: none;
+    }
+
+    /* AUDIO SYNC INDICATOR */
+    .sync-indicator {
+      position: absolute;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      z-index: 9998;
+      display: none;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { background: rgba(0, 0, 0, 0.7); }
+      50% { background: rgba(255, 0, 0, 0.5); }
+      100% { background: rgba(0, 0, 0, 0.7); }
+    }
+
     @media (max-width: 600px) {
+      .audio-switch-overlay {
+        top: 12px;
+        left: 12px;
+        font-size: 12px;
+        padding: 8px 12px;
+        min-width: 180px;
+      }
+      
       .telegram-overlay {
         top: 12px;
         right: 12px;
@@ -80,6 +173,18 @@
         height: 18px;
       }
     }
+
+    /* LOADING OVERLAY */
+    .loading-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 16px;
+      z-index: 9997;
+      display: none;
+    }
   </style>
 </head>
 
@@ -89,6 +194,25 @@
     <video autoplay playsinline preload="metadata"
       poster="https://media.crictracker.com/media/featureimage/2021/09/Fan-Code.jpg">
     </video>
+
+    <!-- AUDIO SWITCH BUTTON -->
+    <div class="audio-switch-overlay" id="audioSwitch">
+      <svg class="audio-switch-icon" viewBox="0 0 24 24">
+        <path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/>
+      </svg>
+      <span>YouTube Audio</span>
+      <span class="audio-status" id="audioStatus">OFF</span>
+    </div>
+
+    <!-- SYNC INDICATOR -->
+    <div class="sync-indicator" id="syncIndicator">
+      Syncing YouTube Audio...
+    </div>
+
+    <!-- LOADING OVERLAY -->
+    <div class="loading-overlay" id="loadingOverlay">
+      Loading YouTube Audio...
+    </div>
 
     <!-- TELEGRAM JOIN BUTTON -->
     <a
@@ -101,16 +225,47 @@
     </a>
   </div>
 
+  <!-- HIDDEN YOUTUBE PLAYER -->
+  <div id="youtube-player-container">
+    <iframe 
+      id="youtube-audio-player"
+      src="https://www.youtube.com/embed/tGKkFO8U6R0?enablejsapi=1&controls=0&showinfo=0&rel=0&autoplay=0&loop=0"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowfullscreen>
+    </iframe>
+  </div>
+
   <script>
+    // Global variables
+    let videoPlayer;
+    let youtubePlayer;
+    let isYouTubeAudioActive = false;
+    let syncInterval;
+    let originalVolume = 0.8;
+
+    // YouTube video ID from the provided link
+    const youtubeVideoId = 'tGKkFO8U6R0';
+
     document.addEventListener('DOMContentLoaded', async () => {
+      // Initialize Shaka Player
+      await initializeShakaPlayer();
+      
+      // Load YouTube IFrame API
+      loadYouTubePlayer();
+    });
+
+    async function initializeShakaPlayer() {
       shaka.polyfill.installAll();
-      if (!shaka.Player.isBrowserSupported()) return;
+      if (!shaka.Player.isBrowserSupported()) {
+        console.error('Browser not supported by Shaka Player');
+        return;
+      }
 
       const video = document.querySelector('video');
-      const player = new shaka.Player(video);
+      videoPlayer = new shaka.Player(video);
 
       const container = document.querySelector('.shaka-video-container');
-      const ui = new shaka.ui.Overlay(player, container, video);
+      const ui = new shaka.ui.Overlay(videoPlayer, container, video);
 
       ui.configure({
         controlPanelElements: [
@@ -119,7 +274,7 @@
         ]
       });
 
-      player.configure({
+      videoPlayer.configure({
         drm: {
           clearKeys: {
             "7e9239c1982d984a002df3ed049d0756":
@@ -133,12 +288,207 @@
         "https://a204aivottepl-a.akamaihd.net/sin-nitro/live/clients/dash/enc/fdb3pubmek/out/v1/aefca6420f944a9482e117f315de535f/cenc.mpd";
 
       try {
-        await player.load(streamUrl);
-        video.volume = 0.8;
-        try { await video.play(); }
-        catch { video.muted = true; video.play(); }
+        await videoPlayer.load(streamUrl);
+        video.volume = originalVolume;
+        
+        try { 
+          await video.play(); 
+        } catch { 
+          video.muted = true; 
+          video.play(); 
+        }
+        
+        console.log('Shaka Player initialized successfully');
       } catch (e) {
-        console.error(e);
+        console.error('Error loading stream:', e);
+      }
+    }
+
+    // Load YouTube IFrame Player
+    function loadYouTubePlayer() {
+      // This function will be called by YouTube IFrame API
+      window.onYouTubeIframeAPIReady = function() {
+        youtubePlayer = new YT.Player('youtube-audio-player', {
+          videoId: youtubeVideoId,
+          playerVars: {
+            autoplay: 0,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            modestbranding: 1,
+            rel: 0,
+            showinfo: 0
+          },
+          events: {
+            'onReady': onYouTubePlayerReady,
+            'onStateChange': onYouTubePlayerStateChange,
+            'onError': onYouTubePlayerError
+          }
+        });
+      };
+
+      // If YouTube API is already loaded
+      if (window.YT && window.YT.Player) {
+        window.onYouTubeIframeAPIReady();
+      }
+    }
+
+    function onYouTubePlayerReady(event) {
+      console.log('YouTube Player is ready');
+      // Set initial volume
+      youtubePlayer.setVolume(100);
+      
+      // Add click event to audio switch button
+      document.getElementById('audioSwitch').addEventListener('click', toggleAudioSource);
+    }
+
+    function onYouTubePlayerStateChange(event) {
+      const status = document.getElementById('audioStatus');
+      const audioSwitch = document.getElementById('audioSwitch');
+      
+      switch(event.data) {
+        case YT.PlayerState.PLAYING:
+          if (isYouTubeAudioActive) {
+            status.textContent = 'ON';
+            audioSwitch.classList.add('active');
+          }
+          break;
+        case YT.PlayerState.PAUSED:
+          if (isYouTubeAudioActive) {
+            status.textContent = 'PAUSED';
+            audioSwitch.classList.remove('active');
+          }
+          break;
+        case YT.PlayerState.ENDED:
+          if (isYouTubeAudioActive) {
+            // Restart YouTube video
+            youtubePlayer.seekTo(0);
+            youtubePlayer.playVideo();
+          }
+          break;
+      }
+    }
+
+    function onYouTubePlayerError(event) {
+      console.error('YouTube Player Error:', event.data);
+      document.getElementById('audioStatus').textContent = 'ERROR';
+      document.getElementById('audioSwitch').classList.remove('active');
+      
+      // Fall back to original audio
+      if (isYouTubeAudioActive) {
+        switchToOriginalAudio();
+        alert('YouTube audio failed to load. Switching to original audio.');
+      }
+    }
+
+    function toggleAudioSource() {
+      if (isYouTubeAudioActive) {
+        switchToOriginalAudio();
+      } else {
+        switchToYouTubeAudio();
+      }
+    }
+
+    function switchToYouTubeAudio() {
+      if (!youtubePlayer || !videoPlayer) return;
+      
+      // Show loading
+      document.getElementById('loadingOverlay').style.display = 'block';
+      document.getElementById('syncIndicator').style.display = 'block';
+      
+      // Store original video volume
+      const video = document.querySelector('video');
+      originalVolume = video.volume;
+      
+      // Get current video time
+      const currentTime = video.currentTime;
+      
+      // Mute the original video
+      video.muted = true;
+      
+      // Start YouTube player from current time
+      youtubePlayer.seekTo(currentTime);
+      youtubePlayer.playVideo();
+      youtubePlayer.setVolume(100);
+      
+      // Start sync interval
+      syncInterval = setInterval(syncYouTubeAudio, 1000);
+      
+      // Update UI
+      isYouTubeAudioActive = true;
+      document.getElementById('audioStatus').textContent = 'ON';
+      document.getElementById('audioSwitch').classList.add('active');
+      
+      // Hide loading after 2 seconds
+      setTimeout(() => {
+        document.getElementById('loadingOverlay').style.display = 'none';
+        document.getElementById('syncIndicator').style.display = 'none';
+      }, 2000);
+    }
+
+    function switchToOriginalAudio() {
+      if (!youtubePlayer || !videoPlayer) return;
+      
+      // Pause YouTube player
+      youtubePlayer.pauseVideo();
+      
+      // Clear sync interval
+      if (syncInterval) {
+        clearInterval(syncInterval);
+        syncInterval = null;
+      }
+      
+      // Unmute original video and restore volume
+      const video = document.querySelector('video');
+      video.muted = false;
+      video.volume = originalVolume;
+      
+      // Update UI
+      isYouTubeAudioActive = false;
+      document.getElementById('audioStatus').textContent = 'OFF';
+      document.getElementById('audioSwitch').classList.remove('active');
+    }
+
+    function syncYouTubeAudio() {
+      if (!isYouTubeAudioActive || !youtubePlayer || !videoPlayer) return;
+      
+      const video = document.querySelector('video');
+      const youtubeTime = youtubePlayer.getCurrentTime();
+      const videoTime = video.currentTime;
+      
+      // If difference is more than 2 seconds, resync
+      if (Math.abs(youtubeTime - videoTime) > 2) {
+        youtubePlayer.seekTo(videoTime);
+        console.log('Resyncing YouTube audio to', videoTime);
+      }
+    }
+
+    // Handle page visibility changes
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        // Page is hidden, pause YouTube audio if active
+        if (isYouTubeAudioActive && youtubePlayer) {
+          youtubePlayer.pauseVideo();
+        }
+      } else {
+        // Page is visible again, resume if needed
+        if (isYouTubeAudioActive && youtubePlayer) {
+          const video = document.querySelector('video');
+          if (!video.paused) {
+            youtubePlayer.seekTo(video.currentTime);
+            youtubePlayer.playVideo();
+          }
+        }
+      }
+    });
+
+    // Handle beforeunload
+    window.addEventListener('beforeunload', () => {
+      if (youtubePlayer) {
+        youtubePlayer.pauseVideo();
+      }
+      if (syncInterval) {
+        clearInterval(syncInterval);
       }
     });
   </script>
